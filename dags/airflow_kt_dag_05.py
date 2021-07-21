@@ -1,0 +1,73 @@
+import requests
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.providers.postgres.operators.postgres import PostgresOperator
+from datetime import datetime, timedelta
+
+default_args = {
+    "owner": "airflow",
+    "email_on_failure": False,
+    "email_on_retry": False,
+    "email": "admin@localhost.com",
+    "retries": 0,
+    "retry_delay": timedelta(minutes=5)
+}
+
+
+def fetch_data(**context: dict):
+
+    dag_params = {
+        "table_name": "random"
+    }
+
+    runtime_conf = context['dag_run'].conf
+    if runtime_conf:
+        dag_params["table_name"] = runtime_conf["table_name"]
+
+    data = requests.get("https://random-data-api.com/api/address/random_address").json()
+
+    ti = context['ti']
+    ti.xcom_push(key="table_name", value=dag_params["table_name"])
+    ti.xcom_push(key="country", value=data["country"].replace("'", ""))
+    ti.xcom_push(key="country_code", value=data["country_code"].replace("'", ""))
+
+
+with DAG(
+        dag_id="airflow_kt_dag_05",
+        start_date=datetime(2021, 7, 1),
+        schedule_interval=None,
+        tags=["Airflow KT"],
+        default_args=default_args,
+        catchup=False
+) as dag:
+
+    create_country_table = PostgresOperator(
+        task_id="create_country_table",
+        postgres_conn_id="country_postgres",
+        sql="""
+            CREATE TABLE IF NOT EXISTS {{ ti.xcom_pull(task_ids='fetch_data', key='table_name') }} (
+                country VARCHAR NOT NULL,
+                country_code VARCHAR NOT NULL
+            );
+          """
+    )
+
+    fetch_data = PythonOperator(
+            task_id="fetch_data",
+            python_callable=fetch_data,
+            provide_context=True
+    )
+
+    insert_data = PostgresOperator(
+        task_id="insert_data",
+        postgres_conn_id="country_postgres",
+        sql="""
+            INSERT INTO {{ ti.xcom_pull(task_ids='fetch_data', key='table_name') }}
+            VALUES (
+                '{{ ti.xcom_pull(task_ids='fetch_data', key='country') }}',
+                '{{ ti.xcom_pull(task_ids='fetch_data', key='country_code') }}'
+            );
+        """
+    )
+
+    fetch_data >> create_country_table >> insert_data
