@@ -22,7 +22,7 @@ def py_task(**context):
 with DAG(
         dag_id="airflow_kt_dag_03A",
         start_date=datetime(2021, 7, 1),
-        schedule_interval="@daily",
+        schedule_interval=None,
         tags=["Airflow KT"],
         default_args=default_args,
         catchup=False
